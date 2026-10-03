@@ -484,6 +484,28 @@ test('不应期：起始首裂不受限，但女儿下一帧立即再分裂被�
   assert.match(sol.refractoryBlock.intervalLabel, /第 2 帧 → 第 3 帧/);
 });
 
+test('不应期：容量收窄下成熟支可错峰分裂，不强制同帧分裂（漏判修复）', () => {
+  // 6 帧候选数 2、2、2、2、3、4，全同坐标同亮度；根在首个帧间首裂（豁免），
+  // 两支各保持两个帧间达到年龄 2；第 5 帧容量仅 3——只许一支分裂、另一支保持，
+  // 最后一个帧间再由仍成熟（年龄 3）的支分裂，形成 4 条存活支。
+  const counts = [2, 2, 2, 2, 3, 4];
+  const frames = counts.map((n, t) =>
+    Array.from({ length: n }, (_, i) => ({ id: `f${t}_${i}`, x: 0, y: 0, b: 1 })));
+  const input = {
+    frames,
+    startId: 'f0_0', maxDist: 0, maxSkip: 0, target: 4,
+    refractoryEnabled: true, refractory: 2,
+  };
+  const { spec, sol } = run(input);
+  assertValidLineage(spec, sol, input);
+  assertRefractoryConsistent(spec, sol, input);
+  assert.deepEqual(sol.counts, [1, 2, 2, 2, 3, 4]);
+  assert.equal(sol.totalBrightness, 14);
+  assert.equal(sol.skips, 0);
+  assert.equal(sol.divisions, 3);
+  assert.deepEqual(sol.divisionEvents.map((d) => d.motherAge), [null, 2, 3]);
+});
+
 test('不应期：合格方案标注代际、分裂年龄与尚余等待帧间', () => {
   const input = {
     frames: [

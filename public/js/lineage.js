@@ -539,29 +539,54 @@ function solveEngine(spec, enforceRefractory, feasOnly = false) {
     return co >= target;
   }
 
-  // 年龄感知的增长走廊上界（仅启用不应期时使用）：未成熟支不能分裂只能单传，
-  // 成熟支每步至多翻倍、女儿归 0；漏检只会延缓成熟，求上界时忽略。
+  // 年龄感知的增长走廊上界（仅启用不应期时使用）：未成熟支只能单传且年龄 +1，
+  // 成熟支可「单传（保留成熟年龄）」或「分裂为两个零龄女儿」。逐帧在年龄多重集
+  // 上枚举成熟支分裂 / 保持的全部配比——容量收窄时允许部分成熟支暂不分裂、把
+  // 成熟度保留到下一帧间（错峰分裂）；不得强制所有成熟支同帧分裂后再按容量截断
+  // （那会丢掉选择保持的成熟支，低估末帧可达支数）。待补获漏检母本在第一步强制
+  // 单传、年龄沿用。新开漏检只会延缓增支且可能错开容量，故求上界时不建模：一旦
+  // 「全部保持」仍超出某未来帧容量，宁可放弃剪枝（按可达处理）也不误判。
   function canReachTargetAged(t, live, gaps, liveAge, gapAge) {
-    let ages = bits(live).map((i) => liveAge[i]);
-    let gapAges = bits(gaps).map((i) => gapAge[i]);
+    const clampAge = (a) => (a >= refractory ? refractory : a); // ROOT_AGE 视为成熟
+    const norm = (arr) => arr.slice().sort((x, y) => y - x);
+    const keyOf = (arr) => norm(arr).join(',');
+    const gapFirst = bits(gaps).map((i) => clampAge(gapAge[i]));
+    let frontier = new Map();
+    const startAges = bits(live).map((i) => clampAge(liveAge[i]));
+    frontier.set(keyOf(startAges), startAges);
+
     for (let s = 1; s <= F - 1 - t; s++) {
-      const next = gapAges; // 待补获漏检母本：恰一个女儿，年龄沿用
-      for (const a of ages) {
-        if (a === ROOT_AGE || a >= refractory) {
-          next.push(0, 0); // 成熟支分裂为两个零龄女儿
-        } else {
-          next.push(Math.min(refractory, a + 1)); // 未成熟只能保持
+      const cap = sizes[t + s];
+      const forced = s === 1 ? gapFirst : []; // 漏检补获女儿，年龄沿用
+      const nf = new Map();
+      for (const ages of frontier.values()) {
+        let mature = 0;
+        const young = []; // 未成熟支强制单传后的女儿年龄
+        for (const a of ages) {
+          if (a >= refractory) mature++;
+          else young.push(Math.min(refractory, a + 1));
+        }
+        const fixed = young.length + forced.length;
+        // 即使一支都不分裂仍放不下：真实模型或可新开漏检错开该帧容量，放弃剪枝
+        if (fixed + mature > cap) return true;
+        // k = 本帧选择分裂的成熟支数；其余成熟支保持（年龄仍为门槛值）
+        for (let k = 0; k <= mature; k++) {
+          const n = fixed + (mature - k) + 2 * k;
+          if (n > cap) continue;
+          const cfg = young.concat(forced);
+          for (let q = 0; q < mature - k; q++) cfg.push(refractory);
+          for (let q = 0; q < 2 * k; q++) cfg.push(0);
+          const key = keyOf(cfg);
+          if (!nf.has(key)) nf.set(key, cfg);
         }
       }
-      // 帧容量有限时保留最成熟的支，保证上界对未来最乐观
-      if (next.length > sizes[t + s]) {
-        next.sort((a, b) => b - a);
-        next.length = sizes[t + s];
-      }
-      ages = next;
-      gapAges = [];
+      frontier = nf;
+      if (frontier.size === 0) return false;
     }
-    return ages.length >= target;
+    for (const cfg of frontier.values()) {
+      if (cfg.length >= target) return true;
+    }
+    return false;
   }
 
   // 返回从边界 t 到末帧的最优后缀，不可行返回 null
