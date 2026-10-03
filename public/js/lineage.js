@@ -539,29 +539,65 @@ function solveEngine(spec, enforceRefractory, feasOnly = false) {
     return co >= target;
   }
 
-  // 年龄感知的增长走廊上界（仅启用不应期时使用）：未成熟支不能分裂只能单传，
-  // 成熟支每步至多翻倍、女儿归 0；漏检只会延缓成熟，求上界时忽略。
-  function canReachTargetAged(t, live, gaps, liveAge, gapAge) {
-    let ages = bits(live).map((i) => liveAge[i]);
-    let gapAges = bits(gaps).map((i) => gapAge[i]);
-    for (let s = 1; s <= F - 1 - t; s++) {
-      const next = gapAges; // 待补获漏检母本：恰一个女儿，年龄沿用
-      for (const a of ages) {
-        if (a === ROOT_AGE || a >= refractory) {
-          next.push(0, 0); // 成熟支分裂为两个零龄女儿
-        } else {
-          next.push(Math.min(refractory, a + 1)); // 未成熟只能保持
-        }
+  // 年龄感知的增长走廊上界（仅启用不应期时使用）：从「存活支年龄多重集合」
+  // 出发，精确计算末帧前最多能凑出的存活支数。每支每个帧间可保持（年龄 +1，
+  // 钳制门槛）或成熟后分裂（两女归 0）——成熟支不是必须分裂：容量收窄的帧
+  // 可以只放部分成熟支分裂、其余继续保持成熟，错峰安排不被排除。待补获漏检
+  // 支恰产一女、年龄沿用。帧容量不足时只保留最成熟支：同龄或更成熟支的未来
+  // 后代数不少于更年轻支（其保持/分裂选择都能被更成熟支模仿），截断不会低估
+  // 上界。跨漏检（+2）与两次保持同龄到达，在只计数的松弛模型中不带来额外
+  // 收益，故上界无需显式枚举漏检。
+  const corridorMemo = new Map();
+  // 单步转移的全部去重女儿年龄多重集合：la 每支保持或（成熟）分裂，ga 为
+  // 必现的补获女儿；容量超限仅保留最成熟支。
+  function corridorStep(u, la, ga) {
+    let combos = [[]];
+    for (const a of la) {
+      const keep = Math.min(refractory, a + 1);
+      const next = [];
+      for (const c of combos) {
+        next.push([...c, keep]);
+        if (a >= refractory) next.push([...c, 0, 0]);
       }
-      // 帧容量有限时保留最成熟的支，保证上界对未来最乐观
-      if (next.length > sizes[t + s]) {
-        next.sort((a, b) => b - a);
-        next.length = sizes[t + s];
-      }
-      ages = next;
-      gapAges = [];
+      combos = next;
     }
-    return ages.length >= target;
+    const cap = sizes[u + 1];
+    const seen = new Set();
+    const out = [];
+    for (const c of combos) {
+      const all = [...ga, ...c].sort((x, y) => y - x);
+      if (all.length > cap) all.length = cap;
+      const key = all.join(',');
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(all);
+      }
+    }
+    return out;
+  }
+  // 从边界 u 的年龄多重集合到末帧的最大支数（按 target 截顶并备忘复用）
+  function corridorMax(u, ages) {
+    if (u === F - 1) return Math.min(target, ages.length);
+    const key = `${u}|${ages.join(',')}`;
+    const hit = corridorMemo.get(key);
+    if (hit !== undefined) return hit;
+    let best = 0;
+    for (const next of corridorStep(u, ages, [])) {
+      best = Math.max(best, corridorMax(u + 1, next));
+      if (best >= target) break;
+    }
+    best = Math.min(best, target);
+    corridorMemo.set(key, best);
+    return best;
+  }
+  function canReachTargetAged(t, live, gaps, liveAge, gapAge) {
+    const norm = (a) => (a === ROOT_AGE ? refractory : a);
+    const la = bits(live).map((i) => norm(liveAge[i]));
+    const ga = bits(gaps).map((i) => norm(gapAge[i]));
+    for (const next of corridorStep(t, la, ga)) {
+      if (corridorMax(t + 1, next) >= target) return true;
+    }
+    return false;
   }
 
   // 返回从边界 t 到末帧的最优后缀，不可行返回 null

@@ -517,6 +517,26 @@ test('不应期：合格方案标注代际、分裂年龄与尚余等待帧间',
   assert.equal(lateDiv.frame, 3);
 });
 
+test('不应期：容量收窄时允许错峰分裂（成熟支可继续保持而非必须立即分裂）', () => {
+  // 6 帧候选数 2/2/2/2/3/4：起始细胞首个帧间分裂为两支，两支各保持两个帧间
+  // 达到分裂年龄；倒数第二帧容量仅 3，只放其中一支分裂、另一支继续保持；
+  // 末个帧间由仍成熟的分支再裂，最终 4 条存活支。
+  const input = {
+    frames: [2, 2, 2, 2, 3, 4].map((n, t) =>
+      Array.from({ length: n }, (_, i) => ({ id: `f${t}_${i}`, x: 0, y: 0, b: 1 }))),
+    startId: 'f0_0', maxDist: 0, maxSkip: 0, target: 4,
+    refractoryEnabled: true, refractory: 2,
+  };
+  const { spec, sol } = run(input);
+  assertValidLineage(spec, sol, input);
+  assertRefractoryConsistent(spec, sol, input);
+  assert.deepEqual(sol.counts, [1, 2, 2, 2, 3, 4]);
+  assert.equal(sol.totalBrightness, 14);
+  assert.equal(sol.skips, 0);
+  // 三次分裂：起始首裂（不受限）→ 帧 3→4 一支以年龄 2 分裂 → 帧 4→5 另一支以年龄 3 分裂
+  assert.deepEqual(sol.divisionEvents.map((d) => d.motherAge), [null, 2, 3]);
+});
+
 test('不应期：跨漏检连接按真实跨度 +2 计龄', () => {
   const input = {
     frames: [
